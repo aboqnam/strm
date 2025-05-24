@@ -1,12 +1,13 @@
-
 const { addonBuilder } = require("stremio-addon-sdk");
+const axios = require("axios");
+const cheerio = require("cheerio");
 
 const manifest = {
-    id: "org.ammar.testaddon",
+    id: "org.ammar.subsceneaddon",
     version: "1.0.0",
-    name: "تجربة إضافة ستريميو",
-    description: "إضافة تجريبية فقط للتأكد إنها تشتغل",
-    types: ["movie"],
+    name: "Subscene Subtitle Addon",
+    description: "Stremio addon to fetch subtitles from Subscene.com",
+    types: ["movie", "series"],
     resources: ["subtitles"],
     catalogs: [],
     idPrefixes: ["tt"]
@@ -14,18 +15,62 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-builder.defineSubtitlesHandler(({ id }) => {
-    return Promise.resolve({ subtitles: [] });
+async function getDirectSubtitleLink(subPageUrl) {
+    const url = `https://sub-scene.com${subPageUrl}`;
+    try {
+        const res = await axios.get(url);
+        const $ = cheerio.load(res.data);
+
+        const downloadLink = $(".download > a").attr("href");
+        if (downloadLink) {
+            return `https://sub-scene.com${downloadLink}`;
+        } else {
+            return null;
+        }
+    } catch (e) {
+        return null;
+    }
+}
+
+builder.defineSubtitlesHandler(async ({ id }) => {
+    const searchUrl = `https://sub-scene.com/subtitles/searchbytitle?query=${id}`;
+    try {
+        const response = await axios.get(searchUrl);
+        const $ = cheerio.load(response.data);
+
+        const subs = [];
+        const rows = $(".sub-list .sub-row").toArray();
+
+        for (const elem of rows) {
+            const language = $(elem).find(".language").text().trim();
+            const subPageLink = $(elem).find("a").attr("href");
+
+            if (!subPageLink) continue;
+
+            if (language.toLowerCase().includes("english")) {
+                const directLink = await getDirectSubtitleLink(subPageLink);
+                if (directLink) {
+                    subs.push({
+                        id: directLink,
+                        lang: "en",
+                        name: "Subscene English Subtitle",
+                        url: directLink,
+                    });
+                }
+            }
+        }
+        return { subtitles: subs };
+    } catch (e) {
+        return { subtitles: [] };
+    }
 });
 
-const { getInterface } = builder;
+const http = require("http");
+const port = process.env.PORT || 7000;
 
-// تشغيل السيرفر
-require("http")
-    .createServer((req, res) => {
-        const handler = getInterface();
-        handler(req, res);
-    })
-    .listen(7000, () => {
-        console.log("✅ الإضافة شغالة على: http://localhost:7000/manifest.json");
-    });
+http.createServer((req, res) => {
+    const handler = builder.getInterface();
+    handler(req, res);
+}).listen(port, () => {
+    console.log(`✅ Stremio Subscene Addon running on port ${port}`);
+});
